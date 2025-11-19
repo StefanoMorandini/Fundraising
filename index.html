@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S2S EuVECA Regulatory Framework & Fund Setup Guide</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for aesthetic enhancements */
+        :root {
+            --primary-color: #2563EB; /* Blue-700 */
+            --secondary-color: #10B981; /* Emerald-500 */
+            --accent-color: #FBBF24; /* Amber-400 */
+            --background-color: #F9FAFB;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--background-color);
+        }
+        .header-section {
+            border-bottom: 4px solid var(--primary-color);
+        }
+        .card-summary {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            transition: transform 0.3s ease;
+        }
+        .card-summary:hover {
+            transform: translateY(-5px);
+        }
+        .section-header {
+            color: var(--primary-color);
+        }
+        .gradient-bg {
+            background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+        }
+        .check-icon {
+            color: var(--secondary-color);
+        }
+        .cross-icon {
+            color: #EF4444; /* Red-500 */
+        }
+        /* Style for the fixed sidebar on large screens */
+        @media (min-width: 1024px) {
+            #sidebar {
+                position: sticky;
+                top: 20px;
+                height: calc(100vh - 40px);
+                overflow-y: auto;
+            }
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#2563EB',
+                        'secondary': '#10B981',
+                        'accent': '#FBBF24',
+                    }
+                }
+            }
+        }
+        // Function to handle smooth scrolling
+        function scrollToSection(id) {
+            const element = document.getElementById(id);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+        // Function to toggle sidebar visibility on mobile
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('hidden');
+        }
+
+        // --- GEMINI LLM INTEGRATION ---
+        const API_KEY = ""; // Canvas environment automatically provides API key if empty string
+        const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
+
+        // Exponential backoff retry logic (Mandatory)
+        async function fetchWithRetry(url, options, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        // If not OK, but not a throttling error (429), throw immediately
+                        if (response.status !== 429) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        // If 429, continue to retry
+                    }
+                    return response;
+                } catch (error) {
+                    console.error(`Attempt ${i + 1} failed:`, error);
+                    if (i === retries - 1) throw error; // Last attempt, throw
+                    const delay = Math.pow(2, i) * 1000 + Math.pow(2, i) * 500; // Exponential backoff with jitter
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // Main generation function for LP responses
+        async function generateLPResponse() {
+            const question = document.getElementById('lpQuestion').value;
+            const responseDiv = document.getElementById('lpResponseArea');
+            const loadingDiv = document.getElementById('loadingIndicator');
+
+            if (!question.trim()) {
+                responseDiv.innerHTML = '<p class="text-red-600">Please enter a question to generate a response.</p>';
+                return;
+            }
+
+            loadingDiv.classList.remove('hidden');
+            responseDiv.innerHTML = '';
+            
+            // Comprehensive context summarizing the report's key findings for the LLM
+            const reportContext = `
+                This fund is a €30-50M multi-hub European VC fund, recommended to use the Luxembourg RAIF (Reserved Alternative Investment Fund) structure, managed by an External AIFM (Alternative Investment Fund Manager), and registered under the EuVECA Regulation.
+                The key advantages of RAIF + External AIFM are: 4-8 week setup time, €100-180K setup cost, regulatory certainty (AIFM handles compliance), and the EuVECA EU Marketing Passport.
+                The fund focuses on pre-seed/seed student-led startups (70%+ qualifying SMEs).
+                Switzerland is a third country (outside EU/EEA), requiring a separate Tier 2 Swiss Representative and Paying Agent setup (€30-60K annual cost) for marketing to Qualified Investors (HNWIs, Family Offices).
+                The fund avoids Full AIFMD authorization due to high cost (€325-475K setup) and long timeline (16-24 weeks), as it is unnecessary for its current strategy and size.
+            `;
+
+            const systemPrompt = `You are a highly professional and concise VC Associate and Compliance expert. Your goal is to draft a clear, professional, single-paragraph response to an institutional Limited Partner (LP) question. Use the provided context about the S2S fund structure to ground your answer. Do not use markdown titles or lists. Keep the tone formal and assurance-driven. If the user asks about the fund's strategy or structure, use the context provided.`;
+
+            const userQuery = `Draft a professional response to the following LP due diligence question, referencing the fund's strategy: "${question}". Fund Context: ${reportContext}`;
+
+            const payload = {
+                contents: [{ 
+                    parts: [{ text: userQuery }] 
+                }],
+                // Using Google Search to ground the response in real-time data, if applicable
+                tools: [{ "google_search": {} }], 
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+
+            const options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            };
+
+            try {
+                const response = await fetchWithRetry(API_URL, options);
+                const result = await response.json();
+                
+                const candidate = result.candidates?.[0];
+                
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const text = candidate.content.parts[0].text;
+                    
+                    let sources = [];
+                    const groundingMetadata = candidate.groundingMetadata;
+                    if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                        sources = groundingMetadata.groundingAttributions
+                            .map(attribution => ({
+                                uri: attribution.web?.uri,
+                                title: attribution.web?.title,
+                            }))
+                            .filter(source => source.uri && source.title);
+                    }
+
+                    let sourceHtml = '';
+                    if (sources.length > 0) {
+                        sourceHtml = `<div class="mt-4 pt-3 border-t border-gray-100 text-xs text-gray-500">
+                            <p class="font-semibold mb-1">Grounding Sources (Web Search):</p>
+                            <ul class="list-disc list-inside space-y-0.5 ml-4">
+                                ${sources.slice(0, 3).map(s => `<li><a href="${s.uri}" target="_blank" class="hover:underline text-primary">${s.title}</a></li>`).join('')}
+                            </ul>
+                        </div>`;
+                    }
+
+                    responseDiv.innerHTML = `<div class="bg-gray-50 p-4 rounded-lg border border-gray-200"><p class="text-gray-900 leading-relaxed">${text}</p>${sourceHtml}</div>`;
+                    
+                } else {
+                    responseDiv.innerHTML = '<p class="text-red-600">Error: Could not generate a response. The API returned an invalid structure or no text content.</p>';
+                }
+
+            } catch (e) {
+                console.error("API Call Failed:", e);
+                responseDiv.innerHTML = `<p class="text-red-600">A network or API error occurred. Details: ${e.message}</p>`;
+            } finally {
+                loadingDiv.classList.add('hidden');
+            }
+        }
+    </script>
+</head>
+<body class="text-gray-800">
+
+    <!-- Mobile Menu Button -->
+    <div class="lg:hidden fixed top-4 right-4 z-50">
+        <button onclick="toggleSidebar()" class="p-3 bg-primary text-white rounded-full shadow-lg hover:bg-blue-700 transition duration-300">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
+        </button>
+    </div>
+
+    <div class="max-w-7xl mx-auto lg:flex lg:space-x-8 p-4 sm:p-6 lg:p-8">
+        
+        <!-- Sidebar Navigation -->
+        <div id="sidebar" class="w-full lg:w-1/4 mb-6 lg:mb-0 bg-white p-6 rounded-xl shadow-lg transition-all duration-300 hidden lg:block">
+            <h3 class="text-xl font-bold text-gray-900 border-b-2 pb-2 mb-4 border-gray-100">Report Sections</h3>
+            <nav class="space-y-2">
+                <a href="#summary" onclick="scrollToSection('summary'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">🎯 Executive Summary</a>
+                <a href="#llm-toolkit" onclick="scrollToSection('llm-toolkit'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">✨ LP Comms Toolkit</a>
+                <a href="#part1" onclick="scrollToSection('part1'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 1: EU Legal Framework</a>
+                <a href="#part2" onclick="scrollToSection('part2'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 2: Fund Structure Options</a>
+                <a href="#part3" onclick="scrollToSection('part3'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 3: Switzerland Cross-Border</a>
+                <a href="#part4" onclick="scrollToSection('part4'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 4: Registration Process</a>
+                <a href="#part5" onclick="scrollToSection('part5'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 5: Cost & Budget Analysis</a>
+                <a href="#part6" onclick="scrollToSection('part6'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Part 6: Operational Roadmap</a>
+                <a href="#conclusion" onclick="scrollToSection('conclusion'); toggleSidebar()" class="block text-gray-700 hover:text-primary hover:bg-gray-50 p-2 rounded-lg transition duration-150">Conclusion & Next Steps</a>
+            </nav>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="w-full lg:w-3/4 bg-white p-6 sm:p-8 lg:p-10 rounded-xl shadow-2xl">
+            
+            <!-- Header Section -->
+            <header class="header-section pb-4 mb-8">
+                <h1 class="text-4xl sm:text-5xl font-extrabold text-gray-900 mb-2 leading-tight">
+                    <span class="gradient-bg text-white px-2 py-1 rounded-lg shadow-md">EuVECA</span> Regulatory Framework & Fund Setup Guide
+                </h1>
+                <h2 class="text-xl text-gray-500 font-medium">
+                    Complete Analysis for €30-50M Multi-Hub European Venture Capital Fund
+                </h2>
+                <div class="mt-4 pt-4 border-t border-gray-100 space-y-1">
+                    <p class="text-sm text-gray-600 font-semibold">Prepared for: <span class="text-primary font-normal">S2S European Expansion</span></p>
+                    <p class="text-sm text-gray-600 font-semibold">Fund Size: <span class="text-secondary font-normal">€30-50 million</span></p>
+                    <p class="text-sm text-gray-600 font-semibold">Date: <span class="text-gray-500 font-normal">November 2025</span></p>
+                </div>
+            </header>
+
+            <!-- 🎯 EXECUTIVE SUMMARY -->
+            <section id="summary" class="mb-10 pt-4">
+                <h3 class="text-3xl font-bold section-header mb-4">🎯 EXECUTIVE SUMMARY</h3>
+                <div class="card-summary bg-primary/10 border-l-8 border-primary p-6 rounded-xl shadow-inner">
+                    <p class="text-lg font-semibold text-gray-700 mb-3">
+                        <span class="text-2xl font-extrabold text-primary">Key Recommendation:</span>
+                    </p>
+                    <p class="text-xl font-bold text-gray-900 mb-4">
+                        <span class="text-secondary">Luxembourg RAIF + External AIFM + EuVECA Registration</span>
+                    </p>
+                    <ul class="space-y-2 text-gray-700">
+                        <li class="flex items-center"><svg class="w-5 h-5 mr-2 check-icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 14.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>Fastest Setup (4-8 weeks)</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 mr-2 check-icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 14.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>Cost Efficiency (€100-180K Setup)</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 mr-2 check-icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 14.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>Regulatory Certainty (AIFM manages compliance)</li>
+                        <li class="flex items-center"><svg class="w-5 h-5 mr-2 check-icon" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 14.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"></path></svg>Full EU Marketing Passport</li>
+                    </ul>
+                </div>
+            </section>
+
+            <!-- ✨ LP COMMUNICATION TOOLKIT (GEMINI API) -->
+            <section id="llm-toolkit" class="mb-10 pt-4">
+                <h3 class="text-3xl font-bold section-header mb-4 flex items-center">
+                    ✨ LP Communication Toolkit 
+                    <span class="text-lg font-normal text-gray-500 ml-4">(Gemini Powered)</span>
+                </h3>
+                <div class="card-summary bg-accent/5 border-l-8 border-accent p-6 rounded-xl shadow-inner">
+                    <p class="text-sm font-semibold text-gray-700 mb-4">
+                        Input a due diligence question from an LP (e.g., "Why RAIF instead of a Direct AIFM?") and the AI will draft a professional, context-aware response using the data from this report.
+                    </p>
+                    <textarea id="lpQuestion" rows="3" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-accent focus:border-accent resize-none text-sm" placeholder="Enter LP Question here..."></textarea>
+                    
+                    <button onclick="generateLPResponse()" class="mt-3 w-full sm:w-auto px-6 py-2 bg-accent text-gray-900 font-bold rounded-lg hover:bg-amber-500 transition duration-300 shadow-md flex items-center justify-center">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2zM9 13h6"></path></svg>
+                        ✨ Generate LP Response
+                    </button>
+                    
+                    <div id="loadingIndicator" class="hidden mt-4 text-center">
+                        <svg class="animate-spin h-5 w-5 text-accent-700 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        <p class="text-sm text-gray-600 mt-2">Drafting professional response...</p>
+                    </div>
+
+                    <div id="lpResponseArea" class="mt-4 pt-4 border-t border-gray-200">
+                        <!-- AI Response will appear here -->
+                    </div>
+                </div>
+            </section>
+            
+            <!-- PART 1: EU LEGAL FRAMEWORK FOR VENTURE CAPITAL FUNDS -->
+            <section id="part1" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 1: EU LEGAL FRAMEWORK</h3>
+                
+                <!-- Regulatory Landscape Overview Table -->
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">1.1 Regulatory Landscape Overview</h4>
+                <div class="overflow-x-auto mb-6">
+                    <table class="min-w-full bg-white border border-gray-200 rounded-lg shadow-md">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Regulation</th>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Purpose</th>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Key Feature for S2S</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="border-t">
+                                <td class="px-4 py-3 font-medium text-blue-800">AIFMD</td>
+                                <td class="px-4 py-3 text-sm">Establishes the comprehensive framework for all Alternative Investment Funds.</td>
+                                <td class="px-4 py-3 text-sm">Defines the **Sub-Threshold AIFM** (S2S's target size).</td>
+                            </tr>
+                            <tr class="border-t bg-blue-50">
+                                <td class="px-4 py-3 font-medium text-secondary">EuVECA</td>
+                                <td class="px-4 py-3 text-sm">Specialist, voluntary regime for VCs investing in SMEs.</td>
+                                <td class="px-4 py-3 text-sm">Provides the **EU Marketing Passport** and **Simplified Compliance**.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- EuVECA Requirements Summary -->
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">1.3 EuVECA Key Requirements</h4>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div class="p-5 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <h5 class="font-bold text-lg text-secondary mb-2">Product Requirements (The Fund)</h5>
+                        <ul class="list-disc list-inside space-y-1 text-sm text-gray-600">
+                            <li><span class="font-semibold">Investment Focus:</span> At least <span class="font-bold">70%</span> invested in Qualifying SMEs.</li>
+                            <li><span class="font-semibold">Qualifying SME:</span> Employing fewer than <span class="font-bold">499 persons</span>.</li>
+                            <li><span class="font-semibold">Compliance Timing:</span> 70% calculation applies at the time of the <span class="font-bold">initial investment</span> only.</li>
+                        </ul>
+                    </div>
+                    <div class="p-5 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <h5 class="font-bold text-lg text-secondary mb-2">Manager & Investor Requirements</h5>
+                        <ul class="list-disc list-inside space-y-1 text-sm text-gray-600">
+                            <li><span class="font-semibold">Capital:</span> Minimum <span class="font-bold">€50,000</span> initial capital.</li>
+                            <li><span class="font-semibold">Leverage:</span> Strictly <span class="font-bold">prohibited</span> beyond uncalled commitments.</li>
+                            <li><span class="font-semibold">Investors:</span> Only <span class="font-bold">Professional Investors</span> and <span class="font-bold">Qualifying HNWIs</span> (€100K+ commitment).</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- EU Marketing Passport Summary -->
+                <h4 class="text-xl font-semibold mb-3 mt-6 text-gray-700">1.4 Key Benefit: EU Marketing Passport</h4>
+                <div class="p-5 bg-blue-50 border-l-4 border-blue-600 rounded-lg">
+                    <p class="text-sm text-gray-700">Once registered, the manager can market across all EU/EEA member states via a simple **notification procedure** to the home regulator (CSSF), with no approval required from host member states. Marketing can commence after a <span class="font-bold text-blue-700">20 working day</span> waiting period.</p>
+                </div>
+            </section>
+            
+            <!-- PART 2: FUND STRUCTURE OPTIONS FOR €30-50M FUND -->
+            <section id="part2" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 2: FUND STRUCTURE OPTIONS</h3>
+                
+                <!-- Optimal Structure Highlight -->
+                <div class="p-6 mb-6 bg-accent/10 border-l-4 border-accent rounded-xl shadow-lg">
+                    <h4 class="text-xl font-bold text-accent-700 mb-2">🥇 OPTIMAL CHOICE: Luxembourg RAIF + External AIFM + EuVECA Registration</h4>
+                    <p class="text-gray-700 text-sm">This model leverages the speed of the <span class="font-semibold">RAIF (Reserved Alternative Investment Fund)</span> by delegating all regulatory compliance to an external, authorized AIFM, allowing the S2S team to focus exclusively on investment activities and deal flow across the European hubs.</p>
+                </div>
+                
+                <!-- Structure Comparison Table -->
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">Structure Comparison Summary</h4>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full bg-white border border-gray-200 rounded-lg shadow-md">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Criterion</th>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Direct EuVECA</th>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600">Full AIFMD</th>
+                                <th class="px-4 py-2 text-left text-sm font-semibold text-gray-600 bg-secondary/10">RAIF + External AIFM</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="border-t">
+                                <td class="px-4 py-3 font-medium">Setup Timeline</td>
+                                <td class="px-4 py-3 text-sm">12-16 weeks</td>
+                                <td class="px-4 py-3 text-sm text-red-600">16-24 weeks</td>
+                                <td class="px-4 py-3 text-sm font-bold text-secondary bg-secondary/5">4-8 weeks ✅</td>
+                            </tr>
+                            <tr class="border-t">
+                                <td class="px-4 py-3 font-medium">Setup Costs</td>
+                                <td class="px-4 py-3 text-sm">€145-200K</td>
+                                <td class="px-4 py-3 text-sm text-red-600">€325-475K</td>
+                                <td class="px-4 py-3 text-sm font-bold text-secondary bg-secondary/5">€100-180K ✅</td>
+                            </tr>
+                            <tr class="border-t">
+                                <td class="px-4 py-3 font-medium">Regulatory Risk</td>
+                                <td class="px-4 py-3 text-sm">S2S Liable</td>
+                                <td class="px-4 py-3 text-sm">S2S Liable</td>
+                                <td class="px-4 py-3 text-sm font-bold text-secondary bg-secondary/5">AIFM Manages Risk ✅</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- PART 3: SWITZERLAND CROSS-BORDER CONSIDERATIONS -->
+            <section id="part3" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 3: SWITZERLAND CROSS-BORDER</h3>
+                
+                <div class="p-5 mb-6 bg-red-50 border-l-4 border-red-600 rounded-lg">
+                    <p class="text-sm font-semibold text-red-700">🛑 **Swiss Exclusion:** Switzerland is a Third Country (outside EU/EEA). The EuVECA passport does NOT apply here.</p>
+                </div>
+
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">Recommended Swiss Strategy (Tier 2)</h4>
+                <div class="grid md:grid-cols-2 gap-4">
+                    <div class="p-5 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <h5 class="font-bold text-lg text-primary mb-2">Target Investor Category</h5>
+                        <p class="text-sm text-gray-600 font-medium">Non-Regulated Qualified Investors</p>
+                        <ul class="list-disc list-inside text-xs text-gray-500 mt-1">
+                            <li>HNWIs with professional treasury, Family Offices, Non-regulated Pension Funds.</li>
+                            <li>This category provides access to the broadest, most relevant Swiss LP base for S2S.</li>
+                        </ul>
+                    </div>
+                    <div class="p-5 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <h5 class="font-bold text-lg text-primary mb-2">Required Compliance & Cost</h5>
+                        <p class="text-sm text-gray-600 font-medium">Appoint Swiss Representative + Paying Agent</p>
+                        <ul class="list-disc list-inside text-xs text-gray-500 mt-1">
+                            <li>**Setup:** €25,000 - €50,000</li>
+                            <li>**Annual:** €30,000 - €60,000</li>
+                            <li>This cost is justified by the strong Swiss LP opportunity.</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- PART 4: DETAILED EUVECA REGISTRATION PROCESS -->
+            <section id="part4" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 4: REGISTRATION ROADMAP</h3>
+
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">4.1 Step-by-Step Registration (8-10 Weeks)</h4>
+                <ol class="relative border-l border-primary space-y-6 ml-2">
+                    <li class="mb-6 ml-6">
+                        <span class="absolute flex items-center justify-center w-6 h-6 bg-primary rounded-full -left-3 ring-8 ring-white"><span class="text-white text-xs font-bold">1</span></span>
+                        <h5 class="font-bold text-gray-900">Phase 1: Pre-Structuring & Planning (Wks 1-2)</h5>
+                        <p class="text-sm text-gray-600">Select external AIFM, engage Luxembourg and Swiss counsel, finalize service provider term sheets.</p>
+                    </li>
+                    <li class="mb-6 ml-6">
+                        <span class="absolute flex items-center justify-center w-6 h-6 bg-primary rounded-full -left-3 ring-8 ring-white"><span class="text-white text-xs font-bold">2</span></span>
+                        <h5 class="font-bold text-gray-900">Phase 2: Documentation Preparation (Wks 3-5)</h5>
+                        <p class="text-sm text-gray-600">Draft LPA, PPM, Subscription Agreement, and AIFM's Program of Operations.</p>
+                    </li>
+                    <li class="mb-6 ml-6">
+                        <span class="absolute flex items-center justify-center w-6 h-6 bg-primary rounded-full -left-3 ring-8 ring-white"><span class="text-white text-xs font-bold">3</span></span>
+                        <h5 class="font-bold text-gray-900">Phase 3: Application Submission (Wk 6)</h5>
+                        <p class="text-sm text-gray-600">Submit complete EuVECA Registration Application Package to CSSF (Luxembourg).</p>
+                    </li>
+                    <li class="mb-6 ml-6">
+                        <span class="absolute flex items-center justify-center w-6 h-6 bg-secondary rounded-full -left-3 ring-8 ring-white"><span class="text-white text-xs font-bold">4</span></span>
+                        <h5 class="font-bold text-gray-900">Phase 4: CSSF Regulatory Review (Wks 7-8)</h5>
+                        <p class="text-sm text-gray-600">CSSF grants registration decision (Target 4-6 weeks if complete application).</p>
+                    </li>
+                    <li class="ml-6">
+                        <span class="absolute flex items-center justify-center w-6 h-6 bg-secondary rounded-full -left-3 ring-8 ring-white"><span class="text-white text-xs font-bold">5</span></span>
+                        <h5 class="font-bold text-gray-900">Phase 5: Operational Setup & Launch (Wks 9-10)</h5>
+                        <p class="text-sm text-gray-600">Open bank account, finalize Depositary, file all EU Marketing Notifications, **Fund is Operational.**</p>
+                    </li>
+                </ol>
+            </section>
+
+            <!-- PART 5: COST & BUDGET ANALYSIS -->
+            <section id="part5" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 5: COST & BUDGET ANALYSIS</h3>
+                
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">Total Launch Cost (0-24 Months)</h4>
+                <div class="card-summary bg-primary/5 p-6 rounded-xl shadow-lg mb-6">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Estimated One-Time Setup Cost (0-3 Months)</p>
+                            <p class="text-2xl font-extrabold text-primary">€190,000 - €305,000</p>
+                        </div>
+                        <div class="mt-4 sm:mt-0 sm:border-l sm:border-gray-300 sm:pl-6">
+                            <p class="text-sm font-medium text-gray-600">Estimated Total Annual Recurring Cost</p>
+                            <p class="text-2xl font-extrabold text-secondary">€220,000 - €405,000</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-4 bg-secondary/10 border-l-4 border-secondary rounded-lg">
+                    <p class="text-sm text-gray-700">A standard 2% Management Fee on a **€30M fund (€600K annually)** provides **immediate operating breakeven** and significant capital for team salaries and operations.</p>
+                </div>
+            </section>
+            
+            <!-- PART 6: OPERATIONAL ROADMAP & BEST PRACTICES -->
+            <section id="part6" class="mb-10 pt-4">
+                <h3 class="text-2xl font-bold section-header border-b pb-2 mb-4">PART 6: OPERATIONAL ROADMAP</h3>
+                
+                <h4 class="text-xl font-semibold mb-3 text-gray-700">Months 3-12: Fundraising & Initial Deployment</h4>
+                
+                <div class="grid md:grid-cols-3 gap-4 text-sm">
+                    <div class="p-4 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <p class="font-bold text-primary">Q2 (Mths 3-6)</p>
+                        <p class="text-gray-700">Target **First Close** (€10-15M). Launch Munich Hub. 2-3 initial investments.</p>
+                    </div>
+                    <div class="p-4 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <p class="font-bold text-primary">Q3 (Mths 6-9)</p>
+                        <p class="text-gray-700">Target **Second Close** (€15-20M cum.). Launch Flanders Hub. 3-4 new deals.</p>
+                    </div>
+                    <div class="p-4 bg-white border border-gray-200 rounded-xl shadow-md">
+                        <p class="font-bold text-primary">Q4 (Mths 9-12)</p>
+                        <p class="text-gray-700">Target **Final Close** (€25-30M). Launch Nordic Hub. 3-4 new deals. **Total 10-12 investments.**</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- CONCLUSION & NEXT STEPS -->
+            <section id="conclusion" class="pt-4">
+                <h3 class="text-3xl font-bold section-header mb-4">✅ CONCLUSION & NEXT STEPS</h3>
+                
+                <p class="text-lg text-gray-700 mb-6">The analysis confirms the <span class="font-extrabold text-secondary">RAIF + External AIFM + EuVECA</span> structure is the optimal foundation for S2S to scale its proven student-led model across Europe. It ensures institutional credibility, rapid launch, and allows the S2S team to focus on deal-making rather than regulatory overhead.</p>
+
+                <h4 class="text-xl font-bold text-gray-700 mb-3 border-b pb-1">Immediate Action Items (Next 30 Days)</h4>
+                <ul class="space-y-3">
+                    <li class="flex items-start text-gray-700">
+                        <div class="flex-shrink-0 mr-3 text-accent-600 mt-1">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-8a1 1 0 00-2 0v2a1 1 0 002 0v-2zm4 0a1 1 0 00-2 0v2a1 1 0 002 0v-2z"></path></svg>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Legal & AIFM Engagement:</span> Issue RFP to Luxembourg fund counsel and shortlist External AIFM candidates.
+                        </div>
+                    </li>
+                    <li class="flex items-start text-gray-700">
+                        <div class="flex-shrink-0 mr-3 text-accent-600 mt-1">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-8a1 1 0 00-2 0v2a1 1 0 002 0v-2zm4 0a1 1 0 00-2 0v2a1 1 0 002 0v-2z"></path></svg>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Swiss Setup:</span> Engage Swiss legal counsel to initiate the Tier 2 Representative arrangement in parallel.
+                        </div>
+                    </li>
+                    <li class="flex items-start text-gray-700">
+                        <div class="flex-shrink-0 mr-3 text-accent-600 mt-1">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zm-1-8a1 1 0 00-2 0v2a1 1 0 002 0v-2zm4 0a1 1 0 00-2 0v2a1 1 0 002 0v-2z"></path></svg>
+                        </div>
+                        <div>
+                            <span class="font-semibold">Anchor LP Cultivation:</span> Begin soft marketing discussions with 5-10 potential anchor LPs to secure early commitments.
+                        </div>
+                    </li>
+                </ul>
+                
+            </section>
+
+            <footer class="mt-10 pt-6 border-t border-gray-200 text-center text-xs text-gray-500">
+                <p>Document Prepared by: AI Research &amp; Analysis | Version 1.0 - Comprehensive EuVECA Setup Guide</p>
+                <p class="mt-1">Classification: Confidential - S2S Leadership Only</p>
+            </footer>
+
+        </div>
+    </div>
+
+</body>
+</html>
